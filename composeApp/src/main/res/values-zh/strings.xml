@@ -406,4 +406,18 @@
     <string name="soundpadVolume">音量</string>
     <string name="soundpadBack">返回上级</string>
     <string name="soundpadFolderCount">%1$d 项</string>
+
+    <string name="savedHosts">已保存的主机</string>
+    <string name="noSavedHosts">尚无已保存的主机</string>
+    <string name="saveHost">保存</string>
+    <string name="connectSavedHost">连接</string>
+    <string name="editSavedHost">编辑</string>
+    <string name="deleteSavedHost">删除</string>
+    <string name="addSavedHost">添加主机</string>
+    <string name="closeSavedHosts">关闭</string>
+    <string name="hostNameLabel">名称</string>
+    <string name="hostAddressLabel">地址或主机名</string>
+    <string name="hostNoteLabel">备注（可选）</string>
+    <string name="hostNameUnresolvableTitle">无法解析主机名</string>
+    <string name="hostNameUnresolvableMessage">无法解析 %1$s，请检查名称和 DNS 设置。</string>
 </resources>

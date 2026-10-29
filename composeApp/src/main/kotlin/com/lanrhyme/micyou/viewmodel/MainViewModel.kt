@@ -125,6 +125,8 @@ data class AppUiState(
     val updateErrorMessage: String? = null,
 
     // Discovery State
+    val savedHosts: List<SavedHost> = emptyList(),
+    val lastUsedHostId: String = "",
     val discoveredDevices: List<DiscoveredDevice> = emptyList(),
     val isDiscovering: Boolean = false,
 
@@ -159,6 +161,8 @@ class MainViewModel : ViewModel() {
     private val settings = SettingsFactory.getSettings()
 
     init {
+        _uiState.update { it.copy(savedHosts = SavedHostCodec.decode(settings.getString("saved_hosts", "[]")),
+            lastUsedHostId = settings.getString("last_used_host", "")) }
         // Initialize from settings
         val initialLanguage = try {
             AppLanguage.valueOf(settings.getString("language", AppLanguage.System.name))
@@ -267,6 +271,33 @@ class MainViewModel : ViewModel() {
     fun startDiscovery() = audioStreamViewModel.startDiscovery()
     fun stopDiscovery() = audioStreamViewModel.stopDiscovery()
     fun restartDiscovery() = audioStreamViewModel.restartDiscovery()
+    fun saveHost(host: SavedHost) {
+        val hosts = _uiState.value.savedHosts.toMutableList()
+        val index = hosts.indexOfFirst { it.id == host.id }
+        if (index >= 0) hosts[index] = host else hosts.add(host)
+        settings.putString("saved_hosts", SavedHostCodec.encode(hosts))
+        _uiState.update { it.copy(savedHosts = hosts) }
+    }
+    fun deleteHost(host: SavedHost) {
+        val hosts = _uiState.value.savedHosts.filterNot { it.id == host.id }
+        settings.putString("saved_hosts", SavedHostCodec.encode(hosts))
+        if (_uiState.value.lastUsedHostId == host.id) settings.putString("last_used_host", "")
+        _uiState.update { it.copy(savedHosts = hosts, lastUsedHostId = if (it.lastUsedHostId == host.id) "" else it.lastUsedHostId) }
+    }
+    fun connectHost(host: SavedHost) {
+        if (audioStreamViewModel.uiState.value.streamState == StreamState.Streaming ||
+            audioStreamViewModel.uiState.value.streamState == StreamState.Connecting) return
+        audioStreamViewModel.setMode(host.mode)
+        audioStreamViewModel.setIp(host.address)
+        audioStreamViewModel.setPort(host.port.toString())
+        settings.putString("last_used_host", host.id)
+        _uiState.update { it.copy(lastUsedHostId = host.id) }
+        audioStreamViewModel.startStream()
+    }
+    fun saveDiscoveredDevice(device: DiscoveredDevice) {
+        if (_uiState.value.savedHosts.any { it.address == device.hostAddress && it.port == device.port && it.mode == ConnectionMode.Wifi }) return
+        saveHost(SavedHost(name = device.name, address = device.hostAddress, port = device.port, mode = ConnectionMode.Wifi))
+    }
     fun selectDiscoveredDevice(device: DiscoveredDevice) {
         audioStreamViewModel.setIp(device.hostAddress)
         audioStreamViewModel.setPort(device.port.toString())

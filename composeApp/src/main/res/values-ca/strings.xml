@@ -391,4 +391,18 @@
     <string name="qs_toast_stopped">Streaming stopped</string>
     <string name="firstLaunchDownloadPc">下载电脑端喵~</string>
     <string name="errorSuggestionCheckSettings">检查系统设置中的应用权限喵~</string>
+
+    <string name="savedHosts">Saved hosts</string>
+    <string name="noSavedHosts">No saved hosts yet</string>
+    <string name="saveHost">Save</string>
+    <string name="connectSavedHost">Connect</string>
+    <string name="editSavedHost">Edit</string>
+    <string name="deleteSavedHost">Delete</string>
+    <string name="addSavedHost">Add host</string>
+    <string name="closeSavedHosts">Close</string>
+    <string name="hostNameLabel">Name</string>
+    <string name="hostAddressLabel">Address or hostname</string>
+    <string name="hostNoteLabel">Note (optional)</string>
+    <string name="hostNameUnresolvableTitle">Name not found</string>
+    <string name="hostNameUnresolvableMessage">Could not resolve %1$s. Check the name and DNS settings.</string>
 </resources>

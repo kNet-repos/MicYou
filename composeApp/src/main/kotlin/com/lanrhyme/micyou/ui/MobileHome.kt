@@ -41,6 +41,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -53,6 +55,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -73,6 +76,9 @@ import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
@@ -135,6 +141,7 @@ import com.lanrhyme.micyou.soundpad.SoundPadUiState
 import com.lanrhyme.micyou.viewmodel.AppUiState
 import com.lanrhyme.micyou.viewmodel.ConnectionMode
 import com.lanrhyme.micyou.viewmodel.MainViewModel
+import com.lanrhyme.micyou.viewmodel.SavedHost
 import com.lanrhyme.micyou.viewmodel.StreamState
 import com.lanrhyme.micyou.viewmodel.VisualizerStyle
 
@@ -446,6 +453,8 @@ private fun ConnectionConfigCard(
     cardOpacity: Float = 1f,
     hazeState: HazeState? = null
 ) {
+    var showHosts by remember { mutableStateOf(false) }
+    if (showHosts) SavedHostsDialog(state, viewModel, onDismiss = { showHosts = false })
     HazeSurface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceBright.copy(alpha = cardOpacity),
@@ -515,6 +524,10 @@ private fun ConnectionConfigCard(
             }
 
 
+
+            TextButton(onClick = { showHosts = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.savedHosts))
+            }
 
             // Discovered devices list (WiFi mode only, always visible during connection)
             if (state.mode == ConnectionMode.Wifi) {
@@ -598,6 +611,9 @@ private fun ConnectionConfigCard(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
+                                TextButton(onClick = { viewModel.saveDiscoveredDevice(device) }) {
+                                    Text(stringResource(R.string.saveHost))
+                                }
                             }
                         }
                     }
@@ -615,7 +631,7 @@ private fun ConnectionConfigCard(
                         ShardTextField(
                             value = state.ipAddress,
                             onValueChange = { viewModel.setIp(it) },
-                            label = stringResource(R.string.targetIpLabel),
+                            label = stringResource(R.string.hostAddressLabel),
                             modifier = Modifier.weight(1f),
                             singleLine = true,
                             textStyle = MaterialTheme.typography.bodySmall
@@ -634,6 +650,77 @@ private fun ConnectionConfigCard(
             }
         }
     }
+}
+
+@Composable
+private fun SavedHostsDialog(state: AppUiState, viewModel: MainViewModel, onDismiss: () -> Unit) {
+    var editing by remember { mutableStateOf<SavedHost?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    if (adding || editing != null) {
+        HostEditorDialog(editing, state, onDismiss = { adding = false; editing = null }, onSave = {
+            viewModel.saveHost(it); adding = false; editing = null
+        })
+    } else {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text(stringResource(R.string.savedHosts)) },
+            text = {
+                Column(Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    if (state.savedHosts.isEmpty()) Text(stringResource(R.string.noSavedHosts))
+                    state.savedHosts.sortedByDescending { it.id == state.lastUsedHostId }.forEach { host ->
+                        Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                            Text(host.name, style = MaterialTheme.typography.titleSmall)
+                            Text("${host.address}:${host.port} · ${host.mode.label}", style = MaterialTheme.typography.bodySmall)
+                            if (host.note.isNotBlank()) Text(host.note, style = MaterialTheme.typography.bodySmall)
+                            Row {
+                                TextButton(enabled = state.streamState != StreamState.Streaming && state.streamState != StreamState.Connecting,
+                                    onClick = { viewModel.connectHost(host); onDismiss() }) { Text(stringResource(R.string.connectSavedHost)) }
+                                TextButton(onClick = { editing = host }) { Text(stringResource(R.string.editSavedHost)) }
+                                TextButton(onClick = { viewModel.deleteHost(host) }) { Text(stringResource(R.string.deleteSavedHost)) }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { adding = true }) { Text(stringResource(R.string.addSavedHost)) } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.closeSavedHosts)) } }
+        )
+    }
+}
+
+@Composable
+private fun HostEditorDialog(host: SavedHost?, state: AppUiState, onDismiss: () -> Unit, onSave: (SavedHost) -> Unit) {
+    var name by remember { mutableStateOf(host?.name ?: "") }
+    var address by remember { mutableStateOf(host?.address ?: state.ipAddress) }
+    var port by remember { mutableStateOf(host?.port?.toString() ?: state.port) }
+    var note by remember { mutableStateOf(host?.note ?: "") }
+    var mode by remember { mutableStateOf(host?.mode ?: state.mode) }
+    val parsedPort = port.toIntOrNull()
+    val valid = name.isNotBlank() && address.isNotBlank() && parsedPort != null && parsedPort in 1..65534
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(if (host == null) R.string.addSavedHost else R.string.editSavedHost)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it }, label = { Text(stringResource(R.string.hostNameLabel)) }, singleLine = true)
+                OutlinedTextField(address, { address = it }, label = { Text(stringResource(R.string.hostAddressLabel)) }, singleLine = true)
+                OutlinedTextField(port, { port = it }, label = { Text(stringResource(R.string.portLabel)) }, singleLine = true, isError = parsedPort == null || parsedPort !in 1..65534)
+                OutlinedTextField(note, { note = it }, label = { Text(stringResource(R.string.hostNoteLabel)) }, singleLine = true)
+                Row {
+                    ConnectionMode.entries.forEach { option ->
+                        TextButton(onClick = { mode = option }) {
+                            Text((if (mode == option) "✓ " else "") + option.label)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(enabled = valid, onClick = {
+            onSave(SavedHost(id = host?.id ?: java.util.UUID.randomUUID().toString(), name = name.trim(),
+                address = address.trim(), port = port.toInt(), mode = mode, note = note.trim()))
+        }) { Text(stringResource(R.string.saveHost)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.closeSavedHosts)) } }
+    )
 }
 
 // ==================== Main Control ====================

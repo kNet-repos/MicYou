@@ -628,7 +628,10 @@ class AudioEngine constructor() {
                         val sessionSelectorManager = SelectorManager(Dispatchers.IO)
                         selectorManager = sessionSelectorManager
 
-                        val targetIp = if (mode == ConnectionMode.Usb) "127.0.0.1" else ip
+                        // Resolve at connection time so DNS failures remain distinguishable from socket errors.
+                        // Accept both raw and bracketed IPv6 literals.
+                        val targetHost = if (mode == ConnectionMode.Usb) "127.0.0.1" else ip.removePrefix("[").removeSuffix("]")
+                        val targetIp = java.net.InetAddress.getByName(targetHost).hostAddress ?: targetHost
                         Logger.i("AudioEngine", "Connecting with protocol $transportProtocol to $targetIp:$port")
 
                         // TCP-only 模式或 Both 模式：需要 TCP 连接进行握手

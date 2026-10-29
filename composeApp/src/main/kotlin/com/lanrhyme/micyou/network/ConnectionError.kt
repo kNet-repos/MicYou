@@ -26,6 +26,7 @@ import com.lanrhyme.micyou.viewmodel.ConnectionMode
  */
 enum class ConnectionErrorType {
     // 网络连接相关错误
+    NameUnresolvable,
     NetworkTimeout,          // 网络连接超时
     NetworkUnreachable,      // 网络不可达（IP 错误或网络断开）
     PortInUse,               // 端口已被占用
@@ -72,10 +73,12 @@ object ConnectionErrorHelper {
      * 根据异常分析错误类型
      */
     fun analyzeError(exception: Exception, mode: ConnectionMode): ConnectionErrorType {
-        val message = exception.message ?: ""
-
+        val causes = generateSequence(exception as Throwable?) { it.cause }.take(16).toList()
+        val message = causes.mapNotNull { it.message }.joinToString(" ")
         return when {
+            causes.any { it is java.net.UnknownHostException } -> ConnectionErrorType.NameUnresolvable
             // 网络超时
+            causes.any { it is java.net.SocketTimeoutException } ||
             message.contains("timeout", ignoreCase = true) ||
             message.contains("Timeout", ignoreCase = true) ->
                 ConnectionErrorType.NetworkTimeout
@@ -92,6 +95,7 @@ object ConnectionErrorHelper {
                 ConnectionErrorType.ConnectionRefused
 
             // 网络不可达
+            causes.any { it is java.net.NoRouteToHostException } ||
             message.contains("unreachable", ignoreCase = true) ||
             message.contains("No route to host", ignoreCase = true) ||
             message.contains("Network is unreachable", ignoreCase = true) ->
@@ -134,6 +138,11 @@ object ConnectionErrorHelper {
         ip: String? = null
     ): ConnectionErrorDetails {
         return when (type) {
+            ConnectionErrorType.NameUnresolvable -> ConnectionErrorDetails(
+                type = type, originalMessage = originalMessage,
+                localizedTitle = getString(R.string.hostNameUnresolvableTitle),
+                localizedMessage = String.format(getString(R.string.hostNameUnresolvableMessage), ip ?: "")
+            )
             ConnectionErrorType.NetworkTimeout -> ConnectionErrorDetails(
                 type = type,
                 originalMessage = originalMessage,
