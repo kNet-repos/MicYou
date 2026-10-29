@@ -64,7 +64,9 @@ import io.github.jaredmdobson.concentus.OpusEncoder
 import java.io.EOFException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.lang.ref.WeakReference
@@ -260,6 +262,7 @@ class AudioEngine constructor() {
     companion object {
         private const val MAX_UDP_CONSECUTIVE_FAILURES = 500
         private const val HEARTBEAT_TIMEOUT_MS = 5000L
+        private const val CONNECT_ATTEMPT_TIMEOUT_MS = 3000L
         private const val AUDIO_READ_STALL_TIMEOUT_MS = 5000L
         private const val AUDIO_READ_IDLE_DELAY_MS = 5L
         private const val STOP_TIMEOUT_MS = 5000L
@@ -519,7 +522,10 @@ class AudioEngine constructor() {
                     var input: ByteReadChannel? = null
                     var output: ByteWriteChannel? = null
                     var selectorManager: SelectorManager? = null
-                    var closeConnection: () -> Unit = {}
+                    val closeConnection: () -> Unit = {
+                        tcpSocket?.close()
+                        sessionUdpSocket?.close()
+                    }
                     val sessionJobIdentity = requireNotNull(currentCoroutineContext()[Job])
 
                     try {
@@ -628,29 +634,59 @@ class AudioEngine constructor() {
                         val sessionSelectorManager = SelectorManager(Dispatchers.IO)
                         selectorManager = sessionSelectorManager
 
-                        // Resolve at connection time so DNS failures remain distinguishable from socket errors.
-                        // Accept both raw and bracketed IPv6 literals.
+                        // Resolve at connection time, accepting both raw and bracketed IPv6 literals.
                         val targetHost = if (mode == ConnectionMode.Usb) "127.0.0.1" else ip.removePrefix("[").removeSuffix("]")
-                        val targetIp = java.net.InetAddress.getByName(targetHost).hostAddress ?: targetHost
-                        Logger.i("AudioEngine", "Connecting with protocol $transportProtocol to $targetIp:$port")
+                        val addresses = InetAddress.getAllByName(targetHost)
+                        var targetAddress = addresses.first()
 
                         // TCP-only 模式或 Both 模式：需要 TCP 连接进行握手
                         if (transportProtocol == TransportProtocol.Tcp || transportProtocol == TransportProtocol.Both) {
-                            Logger.i("AudioEngine", "Connecting via TCP to $targetIp:$port")
                             val socketBuilder = aSocket(sessionSelectorManager)
-                            tcpSocket = socketBuilder.tcp().connect(targetIp, port) {
-                                keepAlive = true
-                                socketTimeout = 10000L
-                                noDelay = true
+                            val failures = mutableListOf<Exception>()
+                            for (address in addresses) {
+                                val addressText = address.hostAddress ?: continue
+                                Logger.i("AudioEngine", "Connecting via TCP to $addressText:$port")
+                                var candidate: Socket? = null
+                                try {
+                                    val connected = withTimeoutOrNull(CONNECT_ATTEMPT_TIMEOUT_MS) {
+                                        candidate = socketBuilder.tcp().connect(addressText, port) {
+                                            keepAlive = true
+                                            socketTimeout = 10000L
+                                            noDelay = true
+                                        }
+                                        true
+                                    } ?: false
+                                    if (!connected) throw SocketTimeoutException("Connection timeout to $addressText:$port")
+                                    tcpSocket = requireNotNull(candidate)
+                                    targetAddress = address
+                                    candidate = null // Ownership transferred to the session cleanup.
+                                    break
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    failures.add(e)
+                                    Logger.w("AudioEngine", "TCP connection to $addressText:$port failed: ${e.message}")
+                                } finally {
+                                    candidate?.close()
+                                }
                             }
-                            Logger.i("AudioEngine", "TCP connected to $targetIp:$port")
-                            input = tcpSocket.openReadChannel()
-                            output = tcpSocket.openWriteChannel(autoFlush = true)
+                            val connectedSocket = tcpSocket ?: run {
+                                // Prefer a refusal when any address reached a host, and retain the other
+                                // failures for diagnostics. The chosen cause remains available to the UI.
+                                val failure = failures.firstOrNull { it.message?.contains("refused", ignoreCase = true) == true }
+                                    ?: failures.lastOrNull()
+                                    ?: java.net.UnknownHostException(targetHost)
+                                failures.filter { it !== failure }.forEach { failure.addSuppressed(it) }
+                                throw failure
+                            }
+                            Logger.i("AudioEngine", "TCP connected to ${targetAddress.hostAddress}:$port")
+                            input = connectedSocket.openReadChannel()
+                            output = connectedSocket.openWriteChannel(autoFlush = true)
                             startStopMutex.withLock {
                                 if (lifecycleGeneration != sessionGeneration || !desiredRunning) {
                                     throw CancellationException("Audio session superseded during TCP connection")
                                 }
-                                activeTcpSocket = tcpSocket
+                                activeTcpSocket = connectedSocket
                                 activeInput = input
                                 activeOutput = output
                             }
@@ -659,12 +695,12 @@ class AudioEngine constructor() {
                         // UDP 音频传输：WiFi 模式下且协议为 TCP+UDP
                         if (mode == ConnectionMode.Wifi && transportProtocol == TransportProtocol.Both) {
                             val udpPort = calculateUdpPort(port)
-                            Logger.i("AudioEngine", "Connecting via UDP to $targetIp:$udpPort")
+                            Logger.i("AudioEngine", "Connecting via UDP to ${targetAddress.hostAddress}:$udpPort")
                             sessionUdpSocket = DatagramSocket().also {
                                 it.sendBufferSize = 256 * 1024 // 256KB send buffer
                                 Logger.d("AudioEngine", "UDP send buffer: ${it.sendBufferSize / 1024}KB")
                             }
-                            sessionUdpAddress = InetSocketAddress(targetIp, udpPort)
+                            sessionUdpAddress = InetSocketAddress(targetAddress, udpPort)
                             startStopMutex.withLock {
                                 if (lifecycleGeneration != sessionGeneration || !desiredRunning) {
                                     throw CancellationException("Audio session superseded during UDP setup")
@@ -672,12 +708,7 @@ class AudioEngine constructor() {
                                 udpSocket = sessionUdpSocket
                                 udpServerAddress = sessionUdpAddress
                             }
-                            Logger.i("AudioEngine", "UDP connected to $targetIp:$udpPort")
-                        }
-
-                        closeConnection = {
-                            tcpSocket?.close()
-                            sessionUdpSocket?.close()
+                            Logger.i("AudioEngine", "UDP connected to ${targetAddress.hostAddress}:$udpPort")
                         }
 
                         // Handshake (always via TCP if available, otherwise skip)
